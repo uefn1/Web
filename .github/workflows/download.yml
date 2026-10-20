@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       target_url:
-        description: 'ダウンロードするURL'
+        description: '保存したいURL'
         required: true
         type: string
 
@@ -23,33 +23,79 @@ jobs:
         with:
           python-version: '3.11'
 
-      - run: pip install requests
-
-      - name: Prepare public dir
+      - name: オフライン取得 (全アセット)
         run: |
           mkdir -p public/archive
-          cp site_template/index.html public/index.html
-          # 既存のアーカイブがあれば維持
-          if [ -f public/archive/list.json ]; then echo "keep list"; fi
+          URL="${{ inputs.target_url }}"
+          echo "Downloading $URL"
 
-      - name: Download page
-        run: python scripts/download.py "${{ inputs.target_url }}"
+          # -m: mirror, -k: リンクを相対パスに変換, -E: .html付与, -p: 画像CSS JSも取得
+          # -e robots=off: robots.txt無視, --no-parent: 上位階層に行かない
+          wget --mirror --convert-links --adjust-extension --page-requisites \
+               --no-parent -e robots=off \
+               --wait=1 --random-wait \
+               -P public/archive \
+               "$URL" || true
+          
+          ls -R public/archive | head -n 100
 
-      - name: Commit archive to main
+      - name: 一覧ページ生成
+        run: |
+          python - << 'PY'
+          from pathlib import Path
+          import json, datetime
+          root = Path("public/archive")
+          sites = [p for p in root.rglob("*.html")]
+
+          # list.json用
+          data_path = Path("public/archive/list.json")
+          old = []
+          if data_path.exists():
+              try: old = json.loads(data_path.read_text(encoding="utf-8"))
+              except: old = []
+
+          # 今回取得したURLをlistに追加
+          import os
+          target = os.environ.get("TARGET_URL", "")
+          if target:
+              old.insert(0, {"url": target, "saved_at": datetime.datetime.now().isoformat()})
+
+          # 重複削除
+          seen=set(); uniq=[]
+          for item in old:
+              if item["url"] not in seen:
+                  uniq.append(item); seen.add(item["url"])
+          data_path.write_text(json.dumps(uniq, ensure_ascii=False, indent=2), encoding="utf-8")
+
+          # index.html生成
+          links = ""
+          for html_file in sorted(root.rglob("index.html"))[:200]:
+              rel = html_file.relative_to(Path("public"))
+              links += f'<li><a href="./{rel}">{rel}</a></li>\n'
+
+          html = f"""<html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width">
+          <title>Offline Archive</title></head>
+          <body style="font-family:sans-serif;max-width:800px;margin:40px auto;padding:0 16px">
+          <h1>完全オフライン保存済み</h1>
+          <p>Actionsで取得したサイトは画像・CSS・JS込みで保存されているのでネット無しで開けます。</p>
+          <ul>{links}</ul>
+          <h2>取得履歴</h2><pre>{json.dumps(uniq, ensure_ascii=False, indent=2)}</pre>
+          </body></html>"""
+          Path("public/index.html").write_text(html, encoding="utf-8")
+          PY
+        env:
+          TARGET_URL: ${{ inputs.target_url }}
+
+      - name: リポジトリに保存をコミット
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add public/
-          git diff --staged --quiet || git commit -m "archive: ${{ inputs.target_url }}"
+          git diff --staged --quiet || git commit -m "offline archive: ${{ inputs.target_url }}"
           git push
 
-      - name: Setup Pages
-        uses: actions/configure-pages@v5
-
-      - name: Upload artifact
-        uses: actions/upload-pages-artifact@v3
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
         with:
           path: ./public
-
-      - name: Deploy to Pages
-        uses: actions/deploy-pages@v4
+      - uses: actions/deploy-pages@v4
