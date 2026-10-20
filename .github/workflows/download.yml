@@ -1,0 +1,55 @@
+name: Download and Deploy to Pages
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_url:
+        description: 'ダウンロードするURL'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - run: pip install requests
+
+      - name: Prepare public dir
+        run: |
+          mkdir -p public/archive
+          cp site_template/index.html public/index.html
+          # 既存のアーカイブがあれば維持
+          if [ -f public/archive/list.json ]; then echo "keep list"; fi
+
+      - name: Download page
+        run: python scripts/download.py "${{ inputs.target_url }}"
+
+      - name: Commit archive to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add public/
+          git diff --staged --quiet || git commit -m "archive: ${{ inputs.target_url }}"
+          git push
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: ./public
+
+      - name: Deploy to Pages
+        uses: actions/deploy-pages@v4
