@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width">
+<title>Archive Downloader</title>
+<style>body{font-family: sans-serif; max-width:720px; margin:40px auto; padding:0 16px} input{width:100%; padding:10px; margin:6px 0} button{padding:10px 16px; cursor:pointer}</style>
+</head>
+<body>
+<h1>URLアーカイブ</h1>
+<p>URLを入力して実行すると、裏でGitHub Actionsがページを取得してこのサイトに保存します。</p>
+
+<label>リポジトリ (例: yourname/my-archive)</label>
+<input id="repo" placeholder="owner/repo">
+<label>ダウンロードしたいURL</label>
+<input id="targetUrl" placeholder="https://example.com">
+<label>GitHub PAT (workflow権限) ※ブラウザにのみ保存</label>
+<input id="pat" type="password" placeholder="github_pat_xxx">
+
+<button id="runBtn">Actionsでダウンロード実行</button>
+<p id="status"></p>
+
+<h2>保存済み</h2>
+<ul id="list">読み込み中...</ul>
+
+<script>
+const repoInput = document.getElementById('repo');
+const patInput = document.getElementById('pat');
+repoInput.value = localStorage.getItem('gh_repo') || '';
+patInput.value = localStorage.getItem('gh_pat') || '';
+
+async function loadList(){
+  try{
+    const res = await fetch('./archive/list.json?'+Date.now());
+    const data = await res.json();
+    document.getElementById('list').innerHTML = data.map(i => 
+      `<li><a href="./archive/${i.file}" target="_blank">${i.url}</a> <small>${i.saved_at}</small></li>`
+    ).join('');
+  }catch(e){ document.getElementById('list').innerText = 'まだありません'; }
+}
+loadList();
+
+document.getElementById('runBtn').onclick = async () => {
+  const repo = repoInput.value.trim();
+  const targetUrl = document.getElementById('targetUrl').value.trim();
+  const pat = patInput.value.trim();
+  if(!repo || !targetUrl || !pat){ alert('全て入力してください'); return; }
+  localStorage.setItem('gh_repo', repo);
+  localStorage.setItem('gh_pat', pat);
+
+  document.getElementById('status').innerText = 'Actionsを起動中...';
+  const res = await fetch(`https://api.github.com/repos/${repo}/actions/workflows/download.yml/dispatches`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${pat}`,
+      'Accept': 'application/vnd.github.v3+json'
+    },
+    body: JSON.stringify({ ref: 'main', inputs: { target_url: targetUrl } })
+  });
+  if(res.ok){
+    document.getElementById('status').innerText = '起動成功！1分ほど待つと下のリストに反映されます。';
+  }else{
+    const t = await res.text();
+    document.getElementById('status').innerText = '失敗: ' + res.status + ' ' + t;
+  }
+}
+</script>
+</body>
+</html>
